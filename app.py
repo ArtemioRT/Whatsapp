@@ -87,6 +87,7 @@ def get_catalog_message_input(recipient, text, catalog_id=CATALOG_ID, thread_id=
 
     message_payload = {
         "messaging_product": "whatsapp",
+        "recipient_type": "individual",  # ¡Añadido para cumplir con las especificaciones!
         "to": recipient,
         "type": "interactive",
         "interactive": {
