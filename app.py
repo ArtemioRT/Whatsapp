@@ -164,8 +164,9 @@ def generate_response(message_body):
         "Responde la siguiente consulta:\n"
     )
     try:
+        # Usamos la nueva interfaz (si ya ejecutaste `openai migrate` debería funcionar)
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message_body}
