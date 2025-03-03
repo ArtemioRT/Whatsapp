@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-CATALOG_ID = os.getenv("CATALOG_ID")    
+CATALOG_ID = os.getenv("CATALOG_ID")
 openai.api_key = OPENAI_API_KEY
 
 #########################################
@@ -302,6 +302,12 @@ def create_app():
 
     # Registrar blueprint
     app.register_blueprint(webhook_blueprint)
+    
+    # Endpoint raíz para indicar que el servicio está activo
+    @app.route("/")
+    def index():
+        return "Servicio activo", 200
+
     return app
 
 # Si se ejecuta directamente en modo desarrollo
