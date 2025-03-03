@@ -15,6 +15,9 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 CATALOG_ID = os.getenv("CATALOG_ID")
 openai.api_key = OPENAI_API_KEY
 
+# Conjunto para rastrear a los usuarios que ya recibieron el mensaje de bienvenida
+SENT_WELCOME = set()
+
 #########################################
 # Función para obtener product_retailer_id
 #########################################
@@ -143,13 +146,21 @@ def send_catalog_message(recipient, thread_id=None):
     data = get_catalog_message_input(recipient, text, catalog_id=CATALOG_ID, thread_id=thread_id)
     return send_message(data)
 
+def send_welcome_message(recipient, thread_id=None):
+    welcome_text = "¡Hola! Bienvenido a nuestro servicio de WhatsApp. ¿En qué podemos ayudarte hoy?"
+    image_url = "https://t4.ftcdn.net/jpg/04/46/40/87/360_F_446408796_sO3c3ZIuWMgvXNbfXM4Hyqt7pLtGzKQo.jpg"
+    send_text_with_image(recipient, welcome_text, image_url, thread_id=thread_id)
+
 #########################################
 # Integración con OpenAI
 #########################################
 
 def generate_response(message_body):
+    # El sistema debe responder únicamente con la información disponible.
     system_prompt = (
-        "Eres un asistente que responde únicamente en base a la información de OpenAI.\n"
+        "Eres un asistente que responde únicamente en base a la información disponible. "
+        "Si la consulta no puede responderse con la información proporcionada, di: "
+        "'Lo siento, no tengo la información solicitada'.\n"
         "Responde la siguiente consulta:\n"
     )
     try:
@@ -211,6 +222,11 @@ def process_whatsapp_message(body):
     message = body["entry"][0]["changes"][0]["value"]["messages"][0]
     message_type = message.get("type")
     thread_id = message.get("context", {}).get("id") or message["id"]
+
+    # Enviar mensaje de bienvenida si es el primer mensaje del usuario
+    if wa_id not in SENT_WELCOME:
+        send_welcome_message(wa_id, thread_id=thread_id)
+        SENT_WELCOME.add(wa_id)
 
     if message_type == "interactive":
         process_interactive_response(body, thread_id)
