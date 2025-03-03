@@ -222,7 +222,7 @@ def process_whatsapp_message(body):
         else:
             ai_response = generate_response(message_body)
             if should_include_image(message_body):
-                default_image_url = "https://example.com/default.jpg"
+                default_image_url = "https://jumpseller.mx/generated/images/learn/los-10-productos-mas-vendidos-en-mexico/online-shopping-mexico-800-3423d44e0.png"
                 send_text_with_image(wa_id, ai_response, default_image_url, thread_id=thread_id)
             else:
                 data = get_text_message_input(wa_id, ai_response, thread_id=thread_id)
