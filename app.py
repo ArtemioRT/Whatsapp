@@ -19,13 +19,13 @@ openai.api_key = OPENAI_API_KEY
 SENT_WELCOME = set()
 
 #########################################
-# Función para obtener retailer_id
+# Función para obtener todos los retailer_id
 #########################################
 
-def get_product_retailer_id(catalog_id):
+def get_all_retailer_ids(catalog_id):
     """
-    Consulta el endpoint de consulta de productos y retorna únicamente el retailer_id
-    del primer producto en la respuesta.
+    Consulta el endpoint de consulta de productos y retorna una lista
+    con todos los retailer_id de la respuesta.
     Se asume que la respuesta tiene el siguiente formato:
     {
         "data": [
@@ -44,16 +44,22 @@ def get_product_retailer_id(catalog_id):
         response = requests.post(endpoint, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
-        # Extraer la lista de productos según el formato esperado
         products = data.get("data") if isinstance(data, dict) and "data" in data else data
-        if products and isinstance(products, list) and len(products) > 0:
-            return products[0].get("retailer_id")
+        retailer_ids = []
+        if products and isinstance(products, list):
+            for product in products:
+                retailer_id = product.get("retailer_id")
+                if retailer_id:  # Agrega si existe
+                    retailer_ids.append(retailer_id)
+            if not retailer_ids:
+                logging.error("No se encontró ningún retailer_id válido en la respuesta.")
+            return retailer_ids
         else:
             logging.error("No se encontraron productos en la respuesta.")
-            return None
+            return []
     except Exception as e:
         logging.error(f"Error al consultar productos: {e}")
-        return None
+        return []
 
 #########################################
 # Funciones para armar mensajes de WhatsApp
@@ -91,14 +97,17 @@ def get_image_message_input(recipient, image_url, caption=None, thread_id=None):
     return json.dumps(message_payload)
 
 def get_catalog_message_input(recipient, text, catalog_id, thread_id=None):
-    # Obtener el retailer_id desde el endpoint
-    product_retailer_id = get_product_retailer_id(catalog_id)
-    if not product_retailer_id:
-        product_retailer_id = "default_id"  # Valor por defecto en caso de error
-
+    # Obtener todos los retailer_id desde el endpoint
+    retailer_ids = get_all_retailer_ids(catalog_id)
+    if not retailer_ids:
+        retailer_ids = ["default_id"]
+    
+    # Construir la lista de items para el catálogo
+    product_items = [{"product_retailer_id": rid} for rid in retailer_ids]
+    
     message_payload = {
         "messaging_product": "whatsapp",
-        "recipient_type": "individual",  # Campo requerido por la API
+        "recipient_type": "individual",  # Campo requerido
         "to": recipient,
         "type": "interactive",
         "interactive": {
@@ -118,9 +127,7 @@ def get_catalog_message_input(recipient, text, catalog_id, thread_id=None):
                 "sections": [
                     {
                         "title": "Sección 1",
-                        "product_items": [
-                            {"product_retailer_id": product_retailer_id}
-                        ]
+                        "product_items": product_items
                     }
                 ]
             }
@@ -146,7 +153,6 @@ def send_message(data):
     return response
 
 def send_text_with_image(recipient, text, image_url, thread_id=None):
-    # Envía un mensaje de texto y, tras una breve espera, la imagen
     text_data = get_text_message_input(recipient, text, thread_id=thread_id)
     send_message(text_data)
     time.sleep(0.5)
@@ -168,7 +174,6 @@ def send_welcome_message(recipient, thread_id=None):
 #########################################
 
 def generate_response(message_body):
-    # El sistema debe responder únicamente con la información disponible.
     system_prompt = (
         "Eres un asistente que responde únicamente en base a la información disponible. "
         "Si la consulta no puede responderse con la información proporcionada, di: "
@@ -243,7 +248,6 @@ def process_whatsapp_message(body):
         process_interactive_response(body, thread_id)
     elif message_type == "text":
         message_body = message["text"]["body"].lower().strip()
-        # Comando para mostrar catálogo
         if message_body in ["/catalogo", "/productos"]:
             send_catalog_message(wa_id, thread_id=thread_id)
         else:
@@ -277,7 +281,6 @@ webhook_blueprint = Blueprint("webhook", __name__)
 
 def handle_message():
     body = request.get_json()
-    # Si se trata de una actualización de estado de WhatsApp, se ignora
     if body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("statuses"):
         logging.info("Received a WhatsApp status update.")
         return jsonify({"status": "ok"}), 200
@@ -320,21 +323,23 @@ def webhook_post():
 
 def create_app():
     app = Flask(__name__)
-    # Configuración de variables necesarias en current_app.config
     app.config["ACCESS_TOKEN"] = os.getenv("ACCESS_TOKEN")
     app.config["VERSION"] = os.getenv("VERSION", "v20.0")
     app.config["PHONE_NUMBER_ID"] = os.getenv("PHONE_NUMBER_ID")
     app.config["VERIFY_TOKEN"] = VERIFY_TOKEN
 
-    # Registrar blueprint
     app.register_blueprint(webhook_blueprint)
 
-    # Endpoint raíz para indicar que el servicio está activo
     @app.route("/")
     def index():
         return "Servicio activo", 200
 
     return app
+
+if __name__ == '__main__':
+    app = create_app()
+    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 # Ejecución en modo desarrollo
 if __name__ == '__main__':
