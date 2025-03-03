@@ -19,13 +19,24 @@ openai.api_key = OPENAI_API_KEY
 SENT_WELCOME = set()
 
 #########################################
-# Función para obtener product_retailer_id
+# Función para obtener retailer_id
 #########################################
 
 def get_product_retailer_id(catalog_id):
     """
-    Consulta el endpoint de consulta de productos y retorna el retailer_id
-    del primer producto encontrado.
+    Consulta el endpoint de consulta de productos y retorna únicamente el retailer_id
+    del primer producto en la respuesta.
+    Se asume que la respuesta tiene el siguiente formato:
+    {
+        "data": [
+            {
+                ...,
+                "retailer_id": "valor_deseado",
+                ...
+            },
+            ...
+        ]
+    }
     """
     endpoint = "https://backend-whatsapp-bp79.onrender.com/ConsultaProductos"
     payload = {"catalog_id": catalog_id}
@@ -33,7 +44,7 @@ def get_product_retailer_id(catalog_id):
         response = requests.post(endpoint, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
-        # Se asume que la respuesta es una lista de productos o un diccionario con la llave 'data'
+        # Extraer la lista de productos según el formato esperado
         products = data.get("data") if isinstance(data, dict) and "data" in data else data
         if products and isinstance(products, list) and len(products) > 0:
             return products[0].get("retailer_id")
@@ -79,15 +90,15 @@ def get_image_message_input(recipient, image_url, caption=None, thread_id=None):
         message_payload["context"] = {"message_id": thread_id}
     return json.dumps(message_payload)
 
-def get_catalog_message_input(recipient, text, catalog_id=CATALOG_ID, thread_id=None):
-    # Obtener el product_retailer_id desde el endpoint de consulta de productos
+def get_catalog_message_input(recipient, text, catalog_id, thread_id=None):
+    # Obtener el retailer_id desde el endpoint
     product_retailer_id = get_product_retailer_id(catalog_id)
     if not product_retailer_id:
         product_retailer_id = "default_id"  # Valor por defecto en caso de error
 
     message_payload = {
         "messaging_product": "whatsapp",
-        "recipient_type": "individual",  # ¡Añadido para cumplir con las especificaciones!
+        "recipient_type": "individual",  # Campo requerido por la API
         "to": recipient,
         "type": "interactive",
         "interactive": {
@@ -165,7 +176,6 @@ def generate_response(message_body):
         "Responde la siguiente consulta:\n"
     )
     try:
-        # Usamos la nueva interfaz (si ya ejecutaste `openai migrate` debería funcionar)
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
@@ -202,7 +212,6 @@ def process_interactive_response(body, thread_id):
     wa_id = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
     message = body["entry"][0]["changes"][0]["value"]["messages"][0]
     interaction_type = message.get("interactive", {}).get("type")
-
     if interaction_type == "button_reply":
         button_id = message["interactive"]["button_reply"]["id"]
         if button_id == "catalog":
@@ -306,12 +315,11 @@ def webhook_post():
     return handle_message()
 
 #########################################
-# Función de creación y configuración de la aplicación Flask
+# Creación y configuración de la aplicación Flask
 #########################################
 
 def create_app():
     app = Flask(__name__)
-    
     # Configuración de variables necesarias en current_app.config
     app.config["ACCESS_TOKEN"] = os.getenv("ACCESS_TOKEN")
     app.config["VERSION"] = os.getenv("VERSION", "v20.0")
@@ -320,7 +328,7 @@ def create_app():
 
     # Registrar blueprint
     app.register_blueprint(webhook_blueprint)
-    
+
     # Endpoint raíz para indicar que el servicio está activo
     @app.route("/")
     def index():
@@ -328,7 +336,7 @@ def create_app():
 
     return app
 
-# Si se ejecuta directamente en modo desarrollo
+# Ejecución en modo desarrollo
 if __name__ == '__main__':
     app = create_app()
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
