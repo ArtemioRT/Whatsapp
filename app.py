@@ -7,6 +7,7 @@ import requests
 import openai
 from flask import Flask, Blueprint, request, jsonify, current_app
 from dotenv import load_dotenv
+from flasgger import Swagger, swag_from
 
 # Cargar variables de entorno y configurar OpenAI
 load_dotenv()
@@ -26,17 +27,6 @@ def get_all_retailer_ids(catalog_id):
     """
     Consulta el endpoint de consulta de productos y retorna una lista
     con todos los retailer_id de la respuesta.
-    Se asume que la respuesta tiene el siguiente formato:
-    {
-        "data": [
-            {
-                ...,
-                "retailer_id": "valor_deseado",
-                ...
-            },
-            ...
-        ]
-    }
     """
     endpoint = "https://backend-whatsapp-bp79.onrender.com/ConsultaProductos"
     payload = {"catalog_id": catalog_id}
@@ -97,17 +87,15 @@ def get_image_message_input(recipient, image_url, caption=None, thread_id=None):
     return json.dumps(message_payload)
 
 def get_catalog_message_input(recipient, text, catalog_id, thread_id=None):
-    # Obtener todos los retailer_id desde el endpoint
     retailer_ids = get_all_retailer_ids(catalog_id)
     if not retailer_ids:
         retailer_ids = ["default_id"]
     
-    # Construir la lista de items para el catálogo
     product_items = [{"product_retailer_id": rid} for rid in retailer_ids]
     
     message_payload = {
         "messaging_product": "whatsapp",
-        "recipient_type": "individual",  # Campo requerido
+        "recipient_type": "individual",
         "to": recipient,
         "type": "interactive",
         "interactive": {
@@ -225,7 +213,7 @@ def process_interactive_response(body, thread_id):
             text = "Somos una empresa dedicada a..."
             data = get_text_message_input(wa_id, text, thread_id=thread_id)
             send_message(data)
-    # Puedes agregar más respuestas interactivas según necesites
+    # Agrega más respuestas interactivas según necesites
 
 #########################################
 # Procesamiento principal de mensajes
@@ -274,13 +262,115 @@ def is_valid_whatsapp_message(body):
         return False
 
 #########################################
-# Endpoints del Webhook de WhatsApp
+# Blueprints para el Webhook de WhatsApp
 #########################################
 
 webhook_blueprint = Blueprint("webhook", __name__)
 
+@webhook_blueprint.route("/webhook", methods=["GET"])
+@swag_from({
+    'tags': ['Webhook'],
+    'operation_summary': 'Verificar suscripción del Webhook',
+    'parameters': [
+        {
+            'name': 'hub.mode',
+            'in': 'query',
+            'required': False,
+            'schema': {'type': 'string'},
+            'description': 'Modo de suscripción'
+        },
+        {
+            'name': 'hub.verify_token',
+            'in': 'query',
+            'required': False,
+            'schema': {'type': 'string'},
+            'description': 'Token de verificación'
+        },
+        {
+            'name': 'hub.challenge',
+            'in': 'query',
+            'required': False,
+            'schema': {'type': 'string'},
+            'description': 'Reto de verificación'
+        }
+    ],
+    'responses': {
+        '200': {
+            'description': 'Retorna el hub.challenge si la verificación es correcta'
+        },
+        '403': {
+            'description': 'Verificación fallida'
+        },
+        '400': {
+            'description': 'Faltan parámetros'
+        }
+    }
+})
+def webhook_get():
+    return verify()
+
+@webhook_blueprint.route("/webhook", methods=["POST"])
+@swag_from({
+    'tags': ['Webhook'],
+    'operation_summary': 'Procesar mensajes entrantes de WhatsApp',
+    'requestBody': {
+        'required': True,
+        'content': {
+            'application/json': {
+                'schema': {
+                    'type': 'object',
+                    'example': {
+                        "object": "whatsapp_business_account",
+                        "entry": [
+                            {
+                                "changes": [
+                                    {
+                                        "value": {
+                                            "messages": [
+                                                {
+                                                    "id": "wamid...",
+                                                    "text": {
+                                                        "body": "Hola"
+                                                    },
+                                                    "from": "5215512345678"
+                                                }
+                                            ],
+                                            "contacts": [
+                                                {
+                                                    "wa_id": "5215512345678"
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    'responses': {
+        '200': {
+            'description': 'Mensaje procesado correctamente'
+        },
+        '400': {
+            'description': 'JSON inválido'
+        },
+        '404': {
+            'description': 'No es un evento de WhatsApp API'
+        },
+        '500': {
+            'description': 'Error interno al procesar el mensaje'
+        }
+    }
+})
+def webhook_post():
+    return handle_message()
+
 def handle_message():
     body = request.get_json()
+    # Si es un status update (lectura, entrega, etc.)
     if body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("statuses"):
         logging.info("Received a WhatsApp status update.")
         return jsonify({"status": "ok"}), 200
@@ -309,39 +399,75 @@ def verify():
         logging.info("MISSING_PARAMETER")
         return jsonify({"status": "error", "message": "Missing parameters"}), 400
 
-@webhook_blueprint.route("/webhook", methods=["GET"])
-def webhook_get():
-    return verify()
-
-@webhook_blueprint.route("/webhook", methods=["POST"])
-def webhook_post():
-    return handle_message()
-
 #########################################
 # Creación y configuración de la aplicación Flask
 #########################################
 
 def create_app():
+    """
+    Crea la aplicación Flask y configura el Swagger UI.
+    """
     app = Flask(__name__)
+    
+    # Configuraciones de la API de WhatsApp
     app.config["ACCESS_TOKEN"] = os.getenv("ACCESS_TOKEN")
     app.config["VERSION"] = os.getenv("VERSION", "v20.0")
     app.config["PHONE_NUMBER_ID"] = os.getenv("PHONE_NUMBER_ID")
     app.config["VERIFY_TOKEN"] = VERIFY_TOKEN
-
+    
+    # Configuración de Swagger
+    swagger_config = {
+        "headers": [],
+        "specs": [
+            {
+                "endpoint": 'apispec',
+                "route": '/apispec.json',
+                "rule_filter": lambda rule: True,  # Incluir todas las rutas
+                "model_filter": lambda tag: True,  # Incluir todos los modelos
+            }
+        ],
+        "static_url_path": "/flasgger_static",
+        "swagger_ui": True,
+        "specs_route": "/docs/"  # Ruta donde se mostrará la documentación
+    }
+    swagger_template = {
+        "info": {
+            "title": "Documentación de la API de WhatsApp",
+            "description": (
+                "Endpoints para manejar un Webhook de WhatsApp y mostrar/gestionar "
+                "mensajes, catálogos y productos. Integra OpenAI para respuestas automáticas."
+            ),
+            "version": "1.0.0"
+        },
+        "basePath": "/"
+    }
+    
+    Swagger(app, config=swagger_config, template=swagger_template)
+    
+    # Registrar el Blueprint para el webhook
     app.register_blueprint(webhook_blueprint)
-
+    
     @app.route("/")
+    @swag_from({
+        'tags': ['Servidor'],
+        'operation_summary': 'Verificar estado del servidor',
+        'responses': {
+            '200': {
+                'description': 'El servidor está activo',
+                'content': {
+                    'text/plain': {
+                        'example': "Servicio activo"
+                    }
+                }
+            }
+        }
+    })
     def index():
         return "Servicio activo", 200
 
     return app
 
-if __name__ == '__main__':
-    app = create_app()
-    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
-
-# Ejecución en modo desarrollo
+# Ejecutar en modo desarrollo
 if __name__ == '__main__':
     app = create_app()
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
