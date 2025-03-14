@@ -3,38 +3,29 @@ import time
 import json
 import logging
 import requests
-import uuid
-import asyncio
 
+import openai
 from flask import Flask, Blueprint, request, jsonify, current_app
 from dotenv import load_dotenv
 
-from agents import Agent, Runner, set_tracing_export_api_key, function_tool
-
-# Configurar logging para depuración
-logging.basicConfig(level=logging.INFO)
-
-# Cargar variables de entorno
+# Cargar variables de entorno y configurar OpenAI
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 CATALOG_ID = os.getenv("CATALOG_ID")
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-VERSION = os.getenv("VERSION", "v20.0")
-
-# Configurar API key para tracing, si aplica
-set_tracing_export_api_key(OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
 # Conjunto para rastrear a los usuarios que ya recibieron el mensaje de bienvenida
 SENT_WELCOME = set()
 
-# Definición de las tools
-@function_tool
-def get_product_retailer_id(catalog_id: str) -> str:
+#########################################
+# Función para obtener product_retailer_id
+#########################################
+
+def get_product_retailer_id(catalog_id):
     """
-    Consulta un endpoint externo para obtener el retailer_id del primer producto
-    del catálogo. Si no encuentra nada, retorna un string por defecto.
+    Consulta el endpoint de consulta de productos y retorna el retailer_id
+    del primer producto encontrado.
     """
     endpoint = "https://backend-whatsapp-bp79.onrender.com/ConsultaProductos"
     payload = {"catalog_id": catalog_id}
@@ -42,71 +33,23 @@ def get_product_retailer_id(catalog_id: str) -> str:
         response = requests.post(endpoint, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
+        # Se asume que la respuesta es una lista de productos o un diccionario con la llave 'data'
         products = data.get("data") if isinstance(data, dict) and "data" in data else data
         if products and isinstance(products, list) and len(products) > 0:
             return products[0].get("retailer_id")
         else:
             logging.error("No se encontraron productos en la respuesta.")
-            return "default_id"
+            return None
     except Exception as e:
         logging.error(f"Error al consultar productos: {e}")
-        return "default_id"
+        return None
 
-@function_tool
-def send_message_json(payload: dict) -> dict:
-    """
-    Envía un mensaje a la API de WhatsApp Business con el JSON recibido en 'payload'.
-    Retorna el status_code y texto de la respuesta para fines de depuración.
-    """
-    headers = {
-        "Content-type": "application/json",
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-    }
-    url = f"https://graph.facebook.com/{VERSION}/{PHONE_NUMBER_ID}/messages"
-    logging.info(f"Enviando payload a WhatsApp: {json.dumps(payload)}")
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Respuesta de WhatsApp: {response.status_code} - {response.text}")
-        return {"status": response.status_code, "response_text": response.text}
-    except requests.RequestException as e:
-        logging.error(f"Error al enviar mensaje a WhatsApp: {e}")
-        return {"error": str(e)}
+#########################################
+# Funciones para armar mensajes de WhatsApp
+#########################################
 
-@function_tool
-def generate_openai_response(message_body: str) -> str:
-    """
-    Llama a la API de OpenAI para generar una respuesta en base a un prompt de sistema.
-    """
-    import openai
-    openai.api_key = OPENAI_API_KEY
-
-    system_prompt = (
-        "Eres un asistente que responde únicamente con la información disponible. "
-        "Si la consulta no puede responderse con la información proporcionada, di: "
-        "'Lo siento, no tengo la información solicitada'."
-    )
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_body}
-            ],
-            max_tokens=400,
-            temperature=0.7,
-        )
-        return response["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logging.error(f"Error con OpenAI: {e}")
-        return "Lo siento, hubo un problema generando la respuesta."
-
-@function_tool
-def build_text_message(recipient: str, text: str, thread_id: str = None) -> dict:
-    """
-    Construye el payload JSON para enviar un mensaje de texto.
-    """
-    payload = {
+def get_text_message_input(recipient, text, thread_id=None):
+    message_payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": recipient,
@@ -117,15 +60,11 @@ def build_text_message(recipient: str, text: str, thread_id: str = None) -> dict
         }
     }
     if thread_id:
-        payload["context"] = {"message_id": thread_id}
-    return payload
+        message_payload["context"] = {"message_id": thread_id}
+    return json.dumps(message_payload)
 
-@function_tool
-def build_image_message(recipient: str, image_url: str, caption: str = None, thread_id: str = None) -> dict:
-    """
-    Construye el payload JSON para enviar una imagen con texto opcional.
-    """
-    payload = {
+def get_image_message_input(recipient, image_url, caption=None, thread_id=None):
+    message_payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": recipient,
@@ -135,23 +74,18 @@ def build_image_message(recipient: str, image_url: str, caption: str = None, thr
         }
     }
     if caption:
-        payload["image"]["caption"] = caption
+        message_payload["image"]["caption"] = caption
     if thread_id:
-        payload["context"] = {"message_id": thread_id}
-    return payload
+        message_payload["context"] = {"message_id": thread_id}
+    return json.dumps(message_payload)
 
-@function_tool
-def build_catalog_message(
-    recipient: str,
-    text: str,
-    catalog_id: str = CATALOG_ID,
-    thread_id: str = None
-) -> dict:
-    """
-    Construye el payload JSON para enviar un listado interactivo de productos (catálogo).
-    """
-    retailer_id = get_product_retailer_id(catalog_id)
-    payload = {
+def get_catalog_message_input(recipient, text, catalog_id=CATALOG_ID, thread_id=None):
+    # Obtener el product_retailer_id desde el endpoint de consulta de productos
+    product_retailer_id = get_product_retailer_id(catalog_id)
+    if not product_retailer_id:
+        product_retailer_id = "default_id"  # Valor por defecto en caso de error
+
+    message_payload = {
         "messaging_product": "whatsapp",
         "to": recipient,
         "type": "interactive",
@@ -173,7 +107,7 @@ def build_catalog_message(
                     {
                         "title": "Sección 1",
                         "product_items": [
-                            {"product_retailer_id": retailer_id}
+                            {"product_retailer_id": product_retailer_id}
                         ]
                     }
                 ]
@@ -181,88 +115,137 @@ def build_catalog_message(
         }
     }
     if thread_id:
-        payload["context"] = {"message_id": thread_id}
-    return payload
+        message_payload["context"] = {"message_id": thread_id}
+    return json.dumps(message_payload)
 
-# Definir agente
-class WhatsAppAgent(Agent):
-    """
-    Agente que decide cómo responder a mensajes de WhatsApp usando las herramientas registradas.
-    """
-    def run(self, user_input: dict) -> str:
-        """
-        user_input: Se espera un dict con los campos necesarios, por ejemplo:
-          {
-            "wa_id": "...",
-            "message_body": "...",
-            "thread_id": "...",
-            "is_interactive": bool,
-            "button_id": "...",
-          }
-        Retorna un texto que describe la acción tomada (para logging).
-        """
-        wa_id = user_input["wa_id"]
-        message_body = user_input["message_body"]
-        thread_id = user_input["thread_id"]
+def send_message(data):
+    headers = {
+        "Content-type": "application/json",
+        "Authorization": f"Bearer {current_app.config['ACCESS_TOKEN']}",
+    }
+    url = f"https://graph.facebook.com/{current_app.config['VERSION']}/{current_app.config['PHONE_NUMBER_ID']}/messages"
+    try:
+        response = requests.post(url, data=data, headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        logging.error(f"Request failed: {e}")
+        return jsonify({"status": "error", "message": "Failed to send message"}), 500
+    logging.info(f"Status: {response.status_code}, Body: {response.text}")
+    return response
 
-        # Enviar mensaje de bienvenida si es la primera vez que escribe
-        if wa_id not in SENT_WELCOME:
-            welcome_text = "¡Hola! Bienvenido a nuestro servicio de WhatsApp. ¿En qué podemos ayudarte hoy?"
-            image_url = "https://t4.ftcdn.net/jpg/04/46/40/87/360_F_446408796_sO3c3ZIuWMgvXNbfXM4Hyqt7pLtGzKQo.jpg"
-            payload_txt = build_text_message(wa_id, welcome_text, thread_id)
-            send_message_json(payload_txt)
-            time.sleep(0.5)
-            payload_img = build_image_message(wa_id, image_url, None, thread_id)
-            send_message_json(payload_img)
-            SENT_WELCOME.add(wa_id)
+def send_text_with_image(recipient, text, image_url, thread_id=None):
+    # Envía un mensaje de texto y, tras una breve espera, la imagen
+    text_data = get_text_message_input(recipient, text, thread_id=thread_id)
+    send_message(text_data)
+    time.sleep(0.5)
+    image_data = get_image_message_input(recipient, image_url, thread_id=thread_id)
+    send_message(image_data)
 
-        # Si es un mensaje interactivo (botón o catálogo)
-        if user_input["is_interactive"]:
-            button_id = user_input.get("button_id", "")
-            if button_id == "catalog":
-                cat_msg = build_catalog_message(
-                    wa_id,
-                    "Explora nuestro catálogo completo de productos:",
-                    CATALOG_ID,
-                    thread_id
-                )
-                send_message_json(cat_msg)
-                return "Enviado catálogo vía botón"
-            elif button_id == "info":
-                info_payload = build_text_message(wa_id, "Somos una empresa dedicada a...", thread_id)
-                send_message_json(info_payload)
-                return "Enviada info vía botón"
-            else:
-                return "Botón no reconocido"
+def send_catalog_message(recipient, thread_id=None):
+    text = "Explora nuestro catálogo completo de productos:"
+    data = get_catalog_message_input(recipient, text, catalog_id=CATALOG_ID, thread_id=thread_id)
+    return send_message(data)
 
-        # Si es texto normal
+def send_welcome_message(recipient, thread_id=None):
+    welcome_text = "¡Hola! Bienvenido a nuestro servicio de WhatsApp. ¿En qué podemos ayudarte hoy?"
+    image_url = "https://t4.ftcdn.net/jpg/04/46/40/87/360_F_446408796_sO3c3ZIuWMgvXNbfXM4Hyqt7pLtGzKQo.jpg"
+    send_text_with_image(recipient, welcome_text, image_url, thread_id=thread_id)
+
+#########################################
+# Integración con OpenAI
+#########################################
+
+def generate_response(message_body):
+    # El sistema debe responder únicamente con la información disponible.
+    system_prompt = (
+        "Eres un asistente que responde únicamente en base a la información disponible. "
+        "Si la consulta no puede responderse con la información proporcionada, di: "
+        "'Lo siento, no tengo la información solicitada'.\n"
+        "Responde la siguiente consulta:\n"
+    )
+    try:
+        # Usamos la nueva interfaz (si ya ejecutaste `openai migrate` debería funcionar)
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message_body}
+            ],
+            max_tokens=400,
+            temperature=0.7,
+        )
+        return response["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logging.error(f"Error con OpenAI: {e}")
+        return "Lo siento, hubo un problema generando la respuesta."
+
+#########################################
+# Funciones para manejo de imágenes
+#########################################
+
+def should_include_image(message):
+    image_keywords = [
+        "imagen", "foto", "muestra", "ver", "producto", "catalogo", "catálogo"
+    ]
+    message_lower = message.lower()
+    for keyword in image_keywords:
+        if keyword in message_lower:
+            return True
+    return False
+
+#########################################
+# Respuestas interactivas
+#########################################
+
+def process_interactive_response(body, thread_id):
+    wa_id = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
+    message = body["entry"][0]["changes"][0]["value"]["messages"][0]
+    interaction_type = message.get("interactive", {}).get("type")
+
+    if interaction_type == "button_reply":
+        button_id = message["interactive"]["button_reply"]["id"]
+        if button_id == "catalog":
+            send_catalog_message(wa_id, thread_id=thread_id)
+        elif button_id == "info":
+            text = "Somos una empresa dedicada a..."
+            data = get_text_message_input(wa_id, text, thread_id=thread_id)
+            send_message(data)
+    # Puedes agregar más respuestas interactivas según necesites
+
+#########################################
+# Procesamiento principal de mensajes
+#########################################
+
+def process_whatsapp_message(body):
+    if not is_valid_whatsapp_message(body):
+        return
+    wa_id = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
+    message = body["entry"][0]["changes"][0]["value"]["messages"][0]
+    message_type = message.get("type")
+    thread_id = message.get("context", {}).get("id") or message["id"]
+
+    # Enviar mensaje de bienvenida si es el primer mensaje del usuario
+    if wa_id not in SENT_WELCOME:
+        send_welcome_message(wa_id, thread_id=thread_id)
+        SENT_WELCOME.add(wa_id)
+
+    if message_type == "interactive":
+        process_interactive_response(body, thread_id)
+    elif message_type == "text":
+        message_body = message["text"]["body"].lower().strip()
+        # Comando para mostrar catálogo
         if message_body in ["/catalogo", "/productos"]:
-            cat_msg = build_catalog_message(
-                wa_id,
-                "Explora nuestro catálogo completo de productos:",
-                CATALOG_ID,
-                thread_id
-            )
-            send_message_json(cat_msg)
-            return "Enviado catálogo por comando"
-        # Verificar si se recibió un mensaje vacío
-        elif not message_body.strip():
-            default_response = "No se recibió ningún mensaje. Por favor, envía una consulta válida."
-            txt_payload = build_text_message(wa_id, default_response, thread_id)
-            send_message_json(txt_payload)
-            return "Mensaje vacío, respuesta enviada"
+            send_catalog_message(wa_id, thread_id=thread_id)
         else:
-            ai_response = generate_openai_response(message_body)
-            txt_payload = build_text_message(wa_id, ai_response, thread_id)
-            send_message_json(txt_payload)
-            return "Respuesta solo texto"
+            ai_response = generate_response(message_body)
+            if should_include_image(message_body):
+                default_image_url = "https://jumpseller.mx/generated/images/learn/los-10-productos-mas-vendidos-en-mexico/online-shopping-mexico-800-3423d44e0.png"
+                send_text_with_image(wa_id, ai_response, default_image_url, thread_id=thread_id)
+            else:
+                data = get_text_message_input(wa_id, ai_response, thread_id=thread_id)
+                send_message(data)
 
-# Instanciar el agente y el Runner
-whatsapp_agent = WhatsAppAgent(name="WhatsApp Assistant")
-runner = Runner()  # Se instancia sin argumentos
-
-# Funciones de procesamiento del webhook
-def is_valid_whatsapp_message(body: dict) -> bool:
+def is_valid_whatsapp_message(body):
     try:
         return (
             body.get("object")
@@ -276,36 +259,29 @@ def is_valid_whatsapp_message(body: dict) -> bool:
         logging.error(f"Error validando mensaje: {e}")
         return False
 
-def process_whatsapp_message(body: dict):
-    value = body["entry"][0]["changes"][0]["value"]
-    wa_id = value["contacts"][0]["wa_id"]
-    message = value["messages"][0]
-    message_type = message.get("type")
-    thread_id = message.get("context", {}).get("id") or message["id"]
+#########################################
+# Endpoints del Webhook de WhatsApp
+#########################################
 
-    user_input = {
-        "wa_id": wa_id,
-        "thread_id": thread_id,
-        "is_interactive": (message_type == "interactive"),
-        "button_id": None,
-        "message_body": ""
-    }
-
-    if message_type == "interactive":
-        interaction_type = message["interactive"].get("type")
-        if interaction_type == "button_reply":
-            user_input["button_id"] = message["interactive"]["button_reply"]["id"]
-    elif message_type == "text":
-        user_input["message_body"] = message["text"]["body"].strip()
-
-    response = asyncio.run(runner.run(whatsapp_agent, [user_input]))
-    logging.info(f"Agente respondió: {response}")
-
-# Definición del Blueprint y rutas Flask
 webhook_blueprint = Blueprint("webhook", __name__)
 
-@webhook_blueprint.route("/webhook", methods=["GET"])
-def webhook_get():
+def handle_message():
+    body = request.get_json()
+    # Si se trata de una actualización de estado de WhatsApp, se ignora
+    if body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("statuses"):
+        logging.info("Received a WhatsApp status update.")
+        return jsonify({"status": "ok"}), 200
+    try:
+        if is_valid_whatsapp_message(body):
+            process_whatsapp_message(body)
+            return jsonify({"status": "ok"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Not a WhatsApp API event"}), 404
+    except json.JSONDecodeError:
+        logging.error("Failed to decode JSON")
+        return jsonify({"status": "error", "message": "Invalid JSON provided"}), 400
+
+def verify():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
@@ -320,40 +296,38 @@ def webhook_get():
         logging.info("MISSING_PARAMETER")
         return jsonify({"status": "error", "message": "Missing parameters"}), 400
 
+@webhook_blueprint.route("/webhook", methods=["GET"])
+def webhook_get():
+    return verify()
+
 @webhook_blueprint.route("/webhook", methods=["POST"])
 def webhook_post():
-    body = request.get_json()
-    if body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("statuses"):
-        logging.info("Received a WhatsApp status update.")
-        return jsonify({"status": "ok"}), 200
+    return handle_message()
 
-    try:
-        if is_valid_whatsapp_message(body):
-            process_whatsapp_message(body)
-            return jsonify({"status": "ok"}), 200
-        else:
-            return jsonify({"status": "error", "message": "Not a WhatsApp API event"}), 404
-    except json.JSONDecodeError:
-        logging.error("Failed to decode JSON")
-        return jsonify({"status": "error", "message": "Invalid JSON provided"}), 400
+#########################################
+# Función de creación y configuración de la aplicación Flask
+#########################################
 
 def create_app():
     app = Flask(__name__)
-    app.config["ACCESS_TOKEN"] = ACCESS_TOKEN
+    
+    # Configuración de variables necesarias en current_app.config
+    app.config["ACCESS_TOKEN"] = os.getenv("ACCESS_TOKEN")
+    app.config["VERSION"] = os.getenv("VERSION", "v20.0")
+    app.config["PHONE_NUMBER_ID"] = os.getenv("PHONE_NUMBER_ID")
     app.config["VERIFY_TOKEN"] = VERIFY_TOKEN
-    app.config["VERSION"] = VERSION
-    app.config["PHONE_NUMBER_ID"] = PHONE_NUMBER_ID
 
+    # Registrar blueprint
     app.register_blueprint(webhook_blueprint)
-
+    
+    # Endpoint raíz para indicar que el servicio está activo
     @app.route("/")
     def index():
-        return "Servicio activo (versión con @function_tool)", 200
+        return "Servicio activo", 200
 
     return app
 
-app = create_app()
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(debug=True, host="0.0.0.0", port=port)
+# Si se ejecuta directamente en modo desarrollo
+if __name__ == '__main__':
+    app = create_app()
+    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
