@@ -1,14 +1,14 @@
 import os
- import time
- import json
- import logging
- import requests
- 
- import openai
- from flask import Flask, Blueprint, request, jsonify, current_app
- from dotenv import load_dotenv
- from flasgger import Swagger, swag_from
- 
+import time
+import json
+import logging
+import requests
+
+import openai
+from flask import Flask, Blueprint, request, jsonify, current_app
+from dotenv import load_dotenv
+from flasgger import Swagger, swag_from
+
  # Cargar variables de entorno y configurar OpenAI
  load_dotenv()
  OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
