@@ -170,17 +170,9 @@ def send_welcome_message(recipient, thread_id=None):
 #########################################
 
 def generate_response(message_body):
-    # Se ha eliminado la limitante para mensajes sencillos.
+    # Se elimina cualquier limitante en el system prompt.
     system_prompt = (
-        "Eres un asistente que responde cualquier pregunta basándote en la información disponible. "
-        "Cuando sea relevante, incluye en tus respuestas la siguiente información: "
-        "locación: Nuevo León, San Pedro; "
-        "horarios de recolección: de lunes a sábado de 7am a 10pm; "
-        "horarios de atención al cliente: solo en días hábiles; "
-        "correo: support jtech@support.mx. "
-        "No incluyas información de teléfono. "
-        "Si la consulta no puede ser respondida con la información proporcionada, di: "
-        "'Lo siento, no tengo la información solicitada'.\n"
+        "Eres un asistente que responde cualquier pregunta de forma completa y precisa. "
         "Responde la siguiente consulta:\n"
     )
     try:
@@ -239,8 +231,11 @@ def process_whatsapp_message(body):
         process_interactive_response(body, thread_id)
     elif message_type == "text":
         message_body = message["text"]["body"].lower().strip()
-        if message_body in ["/catalogo", "/productos"]:
-            send_catalog_message(wa_id, thread_id=thread_id)
+        # Si se pregunta por el catálogo, se indica que se utiliza el comando /catalogos.
+        if "catalogo" in message_body:
+            response_text = "Para ver el catálogo, utiliza el comando /catalogos."
+            data = get_text_message_input(wa_id, response_text, thread_id=thread_id)
+            send_message(data)
         else:
             ai_response = generate_response(message_body)
             data = get_text_message_input(wa_id, ai_response, thread_id=thread_id)
