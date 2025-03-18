@@ -161,12 +161,16 @@ def send_text_with_image(recipient, text, image_url, thread_id=None):
     send_message(image_data)
 
 def send_catalog_message(recipient, thread_id=None):
-    text = "Explora nuestro catálogo completo de productos:"
-    data = get_catalog_message_input(recipient, text, catalog_id=CATALOG_ID, thread_id=thread_id)
+    # Generar la respuesta de catálogo con OpenAI
+    catalog_prompt = "Genera un mensaje invitando a explorar el catálogo de productos."
+    catalog_text = generate_response(catalog_prompt)
+    data = get_catalog_message_input(recipient, catalog_text, catalog_id=CATALOG_ID, thread_id=thread_id)
     return send_message(data)
 
 def send_welcome_message(recipient, thread_id=None):
-    welcome_text = "¡Hola! Bienvenido a nuestro servicio de WhatsApp. ¿En qué podemos ayudarte hoy?"
+    # Generar mensaje de bienvenida con OpenAI
+    welcome_prompt = "Genera un mensaje de bienvenida para un servicio de WhatsApp."
+    welcome_text = generate_response(welcome_prompt)
     image_url = "https://t4.ftcdn.net/jpg/04/46/40/87/360_F_446408796_sO3c3ZIuWMgvXNbfXM4Hyqt7pLtGzKQo.jpg"
     send_text_with_image(recipient, welcome_text, image_url, thread_id=thread_id)
 
@@ -175,6 +179,11 @@ def send_welcome_message(recipient, thread_id=None):
 #########################################
 
 def generate_response(message_body):
+    # Si la pregunta está relacionada con la información de la empresa, se responde de forma fija.
+    lower_msg = message_body.lower()
+    if "jtech" in lower_msg or ("empresa" in lower_msg and "sistemas" in lower_msg):
+        return "Jtech es una empresa de creación de sistemas web."
+    
     system_prompt = (
         "Eres un asistente que responde únicamente en base a la información disponible. "
         "Si la consulta no puede responderse con la información proporcionada, di: "
@@ -223,8 +232,10 @@ def process_interactive_response(body, thread_id):
         if button_id == "catalog":
             send_catalog_message(wa_id, thread_id=thread_id)
         elif button_id == "info":
-            text = "Somos una empresa dedicada a..."
-            data = get_text_message_input(wa_id, text, thread_id=thread_id)
+            # Se genera la respuesta de información de la empresa mediante OpenAI
+            info_prompt = "Genera una descripción de la empresa y sus servicios."
+            info_text = generate_response(info_prompt)
+            data = get_text_message_input(wa_id, info_text, thread_id=thread_id)
             send_message(data)
     # Puedes agregar más respuestas interactivas según necesites
 
