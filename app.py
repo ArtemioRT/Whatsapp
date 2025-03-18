@@ -179,6 +179,7 @@ def generate_response(message_body):
         "horarios de atención al cliente: solo en días hábiles; "
         "correo: support jtech@support.mx. "
         "No incluyas información de teléfono. "
+        "Quienes somos: Jtech es una empresa de creación de sistemas web. "
         "Responde la siguiente consulta:\n"
     )
     try:
