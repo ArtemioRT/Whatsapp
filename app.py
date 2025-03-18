@@ -81,22 +81,6 @@ def get_text_message_input(recipient, text, thread_id=None):
         message_payload["context"] = {"message_id": thread_id}
     return json.dumps(message_payload)
 
-def get_image_message_input(recipient, image_url, caption=None, thread_id=None):
-    message_payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": recipient,
-        "type": "image",
-        "image": {
-            "link": image_url
-        }
-    }
-    if caption:
-        message_payload["image"]["caption"] = caption
-    if thread_id:
-        message_payload["context"] = {"message_id": thread_id}
-    return json.dumps(message_payload)
-
 def get_catalog_message_input(recipient, text, catalog_id, thread_id=None):
     # Obtener todos los retailer_id desde el endpoint
     retailer_ids = get_all_retailer_ids(catalog_id)
@@ -153,13 +137,6 @@ def send_message(data):
     logging.info(f"Status: {response.status_code}, Body: {response.text}")
     return response
 
-def send_text_with_image(recipient, text, image_url, thread_id=None):
-    text_data = get_text_message_input(recipient, text, thread_id=thread_id)
-    send_message(text_data)
-    time.sleep(0.5)
-    image_data = get_image_message_input(recipient, image_url, thread_id=thread_id)
-    send_message(image_data)
-
 def send_catalog_message(recipient, thread_id=None):
     # Generar la respuesta de catálogo con OpenAI
     catalog_prompt = "Genera un mensaje invitando a explorar el catálogo de productos."
@@ -168,25 +145,41 @@ def send_catalog_message(recipient, thread_id=None):
     return send_message(data)
 
 def send_welcome_message(recipient, thread_id=None):
-    # Generar mensaje de bienvenida con OpenAI
+    # Generar mensaje de bienvenida con OpenAI y enviar imagen de saludo
     welcome_prompt = "Genera un mensaje de bienvenida para un servicio de WhatsApp."
     welcome_text = generate_response(welcome_prompt)
-    image_url = "https://t4.ftcdn.net/jpg/04/46/40/87/360_F_446408796_sO3c3ZIuWMgvXNbfXM4Hyqt7pLtGzKQo.jpg"
-    send_text_with_image(recipient, welcome_text, image_url, thread_id=thread_id)
+    # Enviar mensaje de bienvenida de texto
+    text_data = get_text_message_input(recipient, welcome_text, thread_id=thread_id)
+    send_message(text_data)
+    # Enviar imagen de saludo (solo en el mensaje de bienvenida)
+    image_payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "image",
+        "image": {
+            "link": "https://t4.ftcdn.net/jpg/04/46/40/87/360_F_446408796_sO3c3ZIuWMgvXNbfXM4Hyqt7pLtGzKQo.jpg"
+        }
+    }
+    if thread_id:
+        image_payload["context"] = {"message_id": thread_id}
+    send_message(json.dumps(image_payload))
 
 #########################################
 # Integración con OpenAI
 #########################################
 
 def generate_response(message_body):
-    # Si la pregunta está relacionada con la información de la empresa, se responde de forma fija.
-    lower_msg = message_body.lower()
-    if "jtech" in lower_msg or ("empresa" in lower_msg and "sistemas" in lower_msg):
-        return "Jtech es una empresa de creación de sistemas web."
-    
+    # Se ha eliminado la limitante para mensajes sencillos.
     system_prompt = (
-        "Eres un asistente que responde únicamente en base a la información disponible. "
-        "Si la consulta no puede responderse con la información proporcionada, di: "
+        "Eres un asistente que responde cualquier pregunta basándote en la información disponible. "
+        "Cuando sea relevante, incluye en tus respuestas la siguiente información: "
+        "locación: Nuevo León, San Pedro; "
+        "horarios de recolección: de lunes a sábado de 7am a 10pm; "
+        "horarios de atención al cliente: solo en días hábiles; "
+        "correo: support jtech@support.mx. "
+        "No incluyas información de teléfono. "
+        "Si la consulta no puede ser respondida con la información proporcionada, di: "
         "'Lo siento, no tengo la información solicitada'.\n"
         "Responde la siguiente consulta:\n"
     )
@@ -204,20 +197,6 @@ def generate_response(message_body):
     except Exception as e:
         logging.error(f"Error con OpenAI: {e}")
         return "Lo siento, hubo un problema generando la respuesta."
-
-#########################################
-# Funciones para manejo de imágenes
-#########################################
-
-def should_include_image(message):
-    image_keywords = [
-        "imagen", "foto", "muestra", "ver", "producto", "catalogo", "catálogo"
-    ]
-    message_lower = message.lower()
-    for keyword in image_keywords:
-        if keyword in message_lower:
-            return True
-    return False
 
 #########################################
 # Respuestas interactivas
@@ -264,12 +243,8 @@ def process_whatsapp_message(body):
             send_catalog_message(wa_id, thread_id=thread_id)
         else:
             ai_response = generate_response(message_body)
-            if should_include_image(message_body):
-                default_image_url = "https://jumpseller.mx/generated/images/learn/los-10-productos-mas-vendidos-en-mexico/online-shopping-mexico-800-3423d44e0.png"
-                send_text_with_image(wa_id, ai_response, default_image_url, thread_id=thread_id)
-            else:
-                data = get_text_message_input(wa_id, ai_response, thread_id=thread_id)
-                send_message(data)
+            data = get_text_message_input(wa_id, ai_response, thread_id=thread_id)
+            send_message(data)
 
 def is_valid_whatsapp_message(body):
     try:
